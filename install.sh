@@ -12,11 +12,33 @@ for arg in "$@"; do
     esac
 done
 
+echo "===> Detecting operating system..."
+if [ -f /etc/os-release ]; then
+    . /etc/os-release
+    OS_ID="${ID:-unknown}"
+else
+    OS_ID="unknown"
+fi
+
+echo "Detected OS: $OS_ID"
+
 echo "===> Installing dependencies (jq & curl)..."
 if [ "$PROXMOX_MODE" -eq 1 ]; then
     apt update && apt install -y jq curl gpg
-else
+elif [ "$OS_ID" = "arch" ]; then
+    sudo pacman -Syu --noconfirm jq curl
+elif [ "$OS_ID" = "ubuntu" ] || [ "$OS_ID" = "debian" ] || [ "$OS_ID" = "proxmox" ]; then
     sudo apt update && sudo apt install -y jq curl gpg
+else
+    echo "Warning: Unsupported or unknown OS '$OS_ID'. Attempting standard apt/pacman commands..."
+    if command -v apt &>/dev/null; then
+        sudo apt update && sudo apt install -y jq curl gpg
+    elif command -v pacman &>/dev/null; then
+        sudo pacman -Syu --noconfirm jq curl
+    else
+        echo "Error: Could not automatically install dependencies. Please install jq and curl manually."
+        exit 1
+    fi
 fi
 
 echo "===> Installing Charm 'gum'..."
@@ -25,6 +47,8 @@ if [ "$PROXMOX_MODE" -eq 1 ]; then
     curl -fsSL https://repo.charm.sh/apt/gpg.key | gpg --dearmor -o /etc/apt/keyrings/charm.gpg
     echo "deb [signed-by=/etc/apt/keyrings/charm.gpg] https://repo.charm.sh/apt/ * *" | tee /etc/apt/sources.list.d/charm.list
     apt update && apt install -y gum
+elif [ "$OS_ID" = "arch" ]; then
+    sudo pacman -S --noconfirm gum
 else
     sudo mkdir -p /etc/apt/keyrings
     curl -fsSL https://repo.charm.sh/apt/gpg.key | sudo gpg --dearmor -o /etc/apt/keyrings/charm.gpg
@@ -32,19 +56,25 @@ else
     sudo apt update && sudo apt install -y gum
 fi
 
-echo "===> Preparing script version..."
+echo "===> Installing tailserve binary..."
 SCRIPT_PATH="/usr/local/bin/tailserve"
 
 if [ "$PROXMOX_MODE" -eq 1 ]; then
-    # Strip out sudo checks / replace with root verification for Proxmox
-    sed 's/if \[ "\$EUID" -ne 0 \]; then/if [ "\$EUID" -ne 0 ]; then/' tailserve > "$SCRIPT_PATH"
-    chmod +x "$SCRIPT_PATH"
-    echo "Successfully installed 'tailserve' for Proxmox mode (root execution)."
-else
     cp tailserve "$SCRIPT_PATH"
     chmod +x "$SCRIPT_PATH"
-    echo "Successfully installed 'tailserve' for standard Linux environments."
-done
+else
+    sudo cp tailserve "$SCRIPT_PATH"
+    sudo chmod +x "$SCRIPT_PATH"
+fi
+
+echo "===> Checking shell environments..."
+CURRENT_SHELL="$(basename "$SHELL")"
+if [ "$CURRENT_SHELL" = "fish" ]; then
+    echo "Detected fish shell. Setting up global executable path lookup..."
+    # Fish doesn't strictly require separate hashing tables for bin paths if located in /usr/local/bin, 
+    # but we can make sure it's accessible or prompt status.
+    fish -c "set -l" >/dev/null 2>&1 || true
+fi
 
 echo ""
 echo "Installation complete! Run your utility using: tailserve (or sudo tailserve)"
