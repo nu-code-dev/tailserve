@@ -22,24 +22,24 @@ done
 
 list_web_routes() {
     tailscale serve status --json 2>/dev/null | jq -r '
-      (.Web // {}) as $web |
-      (.AllowFunnel // {}) as $allow |
-      $web | to_entries[] |
-      .key as $hostport |
-      (($hostport | split(":") | .[-1]) // "443") as $port |
-      ((.value.Handlers // {}) | to_entries[]) |
-      [ (if ($allow[$hostport] == true) then "funnel" else "serve" end),
-        $hostport, $port, .key, (.value.Proxy // .value.Text // "") ] | @tsv
+    (.Web // {}) as $web |
+    (.AllowFunnel // {}) as $allow |
+    $web | to_entries[] |
+    .key as $hostport |
+    (($hostport | split(":") | .[-1]) // "443") as $port |
+    ((.value.Handlers // {}) | to_entries[]) |
+    [ (if ($allow[$hostport] == true) then "funnel" else "serve" end),
+      $hostport, $port, .key, (.value.Proxy // .value.Text // "") ] | @tsv
     ' 2>/dev/null || true
 }
 
-build_cmd() { # $1 = serve|funnel, $2 = https port, $3 = path, $4 = target port
-    local bin="$1" port="$2" path="$3" tport="$4"
+build_cmd() { # $1 = serve|funnel, $2 = https port, $3 = path, $4 = target ip, $5 = target port
+    local bin="$1" port="$2" path="$3" tip="$4" tport="$5"
     local cmd="tailscale $bin --bg"
     if [ -n "$port" ] && [ "$port" != "443" ]; then
         cmd="$cmd --https=$port"
     fi
-    cmd="$cmd --set-path=$path http://localhost:$tport"
+    cmd="$cmd --set-path=$path http://$tip:$tport"
     printf '%s\n' "$cmd"
 }
 
@@ -86,7 +86,12 @@ EOF
 
 add_route() { # $1 = serve|funnel, $2 = human label, $3 = marker prefix
     local bin="$1" human="$2" prefix="$3"
-    local target_port route_path https_port cmd safe_id
+    local target_ip target_port route_path https_port cmd safe_id
+
+    target_ip=$(gum input --placeholder "Target IP/host to forward to (default: 127.0.0.1):" || true)
+    if [ -z "$target_ip" ]; then
+        target_ip="127.0.0.1"
+    fi
 
     target_port=$(gum input --placeholder "Target local port to proxy (e.g. 8000 or 3100):" || true)
     if [ -z "$target_port" ]; then
@@ -109,7 +114,7 @@ add_route() { # $1 = serve|funnel, $2 = human label, $3 = marker prefix
         https_port=$(gum input --placeholder "Custom HTTPS port (Optional, press Enter for standard 443):" || true)
     fi
 
-    cmd=$(build_cmd "$bin" "${https_port:-443}" "$route_path" "$target_port")
+    cmd=$(build_cmd "$bin" "${https_port:-443}" "$route_path" "$target_ip" "$target_port")
 
     echo "Executing: $cmd"
     if ! eval "$cmd"; then
@@ -119,7 +124,7 @@ add_route() { # $1 = serve|funnel, $2 = human label, $3 = marker prefix
         return
     fi
 
-    safe_id=$(sanitize_id "${route_path}_${https_port:-443}_${target_port}")
+    safe_id=$(sanitize_id "${route_path}_${https_port:-443}_${target_ip}_${target_port}")
 
     if gum confirm "Make this $human persistent across reboots?"; then
         printf '%s\n' "$cmd" > "$PERSIST_DIR/${prefix}_${safe_id}.enabled"
@@ -133,7 +138,7 @@ add_route() { # $1 = serve|funnel, $2 = human label, $3 = marker prefix
 
 remove_route() { # $1 = serve|funnel, $2 = human label, $3 = marker prefix
     local bin="$1" human="$2" prefix="$3"
-    local all choice rest hostport path port target target_port safe_id
+    local all choice rest hostport path port target target_clean target_ip target_port safe_id
 
     all=$(list_web_routes | awk -F'\t' -v k="$bin" '$1==k')
     if [ -z "$all" ]; then
@@ -159,7 +164,11 @@ remove_route() { # $1 = serve|funnel, $2 = human label, $3 = marker prefix
         path="/"
     fi
     port="${hostport##*:}"
-    target_port="${target##*:}"
+
+    target_clean="${target#http://}"
+    target_clean="${target_clean#https://}"
+    target_ip="${target_clean%%:*}"
+    target_port="${target_clean##*:}"
 
     if gum confirm "Stop $human on https://$hostport$path?"; then
         if [ "$bin" = "serve" ]; then
@@ -170,7 +179,7 @@ remove_route() { # $1 = serve|funnel, $2 = human label, $3 = marker prefix
                 || tailscale funnel reset
         fi
 
-        safe_id=$(sanitize_id "${path}_${port}_${target_port}")
+        safe_id=$(sanitize_id "${path}_${port}_${target_ip}_${target_port}")
         rm -f "$PERSIST_DIR/${prefix}_${safe_id}.enabled"
         update_systemd_service
         echo "Removed $human route $path."
@@ -180,7 +189,7 @@ remove_route() { # $1 = serve|funnel, $2 = human label, $3 = marker prefix
 
 toggle_persistence() { # $1 = serve|funnel, $2 = human label, $3 = marker prefix
     local bin="$1" human="$2" prefix="$3"
-    local all choice rest hostport path port target target_port safe_id marker cmd
+    local all choice rest hostport path port target target_clean target_ip target_port safe_id marker cmd
 
     all=$(list_web_routes | awk -F'\t' -v k="$bin" '$1==k')
     if [ -z "$all" ]; then
@@ -206,16 +215,20 @@ toggle_persistence() { # $1 = serve|funnel, $2 = human label, $3 = marker prefix
         path="/"
     fi
     port="${hostport##*:}"
-    target_port="${target##*:}"
 
-    safe_id=$(sanitize_id "${path}_${port}_${target_port}")
+    target_clean="${target#http://}"
+    target_clean="${target_clean#https://}"
+    target_ip="${target_clean%%:*}"
+    target_port="${target_clean##*:}"
+
+    safe_id=$(sanitize_id "${path}_${port}_${target_ip}_${target_port}")
     marker="$PERSIST_DIR/${prefix}_${safe_id}.enabled"
 
     if [ -f "$marker" ]; then
         rm -f "$marker"
         echo "$human route set to TEMPORARY (will not restore on reboot)."
     else
-        cmd=$(build_cmd "$bin" "$port" "$path" "$target_port")
+        cmd=$(build_cmd "$bin" "$port" "$path" "$target_ip" "$target_port")
         printf '%s\n' "$cmd" > "$marker"
         echo "$human route set to PERSISTENT (will auto-start on reboot)."
     fi
@@ -257,7 +270,7 @@ print_status() {
 while true; do
     clear
     echo "================================================================="
-    echo "            TAILSCALE SERVE + FUNNEL MANAGER                     "
+    echo "            TAILSCALE SERVE + FUNNEL MANAGER                 "
     echo "================================================================="
     echo ""
 
