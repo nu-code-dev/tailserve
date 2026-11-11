@@ -7,6 +7,7 @@ An interactive Terminal UI (TUI) manager for **Tailscale Serve** and **Tailscale
 * **Tailnet & Public Routing:** Easily proxy local ports internally (`tailscale serve`) or publicly (`tailscale funnel`).
 * **Persistent Reboots:** Optionally bind any route to automatically restore on system startup using native systemd oneshot services.
 * **Live Status Dashboard:** Instantly view all active routes, target ports, and persistence markers in real time.
+* **Multiple Linux Distros** Works on Arch based Systems, Ubuntu, Debian and apt compatible systems.
 
 ---
 
@@ -25,7 +26,7 @@ chmod +x install.sh
 ```
 
 ### Environment Options:
-* **Standard Linux (Ubuntu / Debian with `sudo`):** Run `./install.sh` normally.
+* **Standard Linux (Ubuntu / Debian / Arch with `sudo`):** Run `./install.sh` normally.
 * **Proxmox Host (Root environment without `sudo`):** Pass the `--proxmox` flag to configure dependencies and paths correctly:
   ./install.sh --proxmox
 
