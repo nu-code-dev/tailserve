@@ -59,11 +59,23 @@ fi
 echo "===> Installing tailserve binary..."
 SCRIPT_PATH="/usr/local/bin/tailserve"
 
+# Select the correct source script based on mode
 if [ "$PROXMOX_MODE" -eq 1 ]; then
-    cp tailserve "$SCRIPT_PATH"
+    SRC_SCRIPT="tailserve-proxmox.sh"
+else
+    SRC_SCRIPT="tailserve.sh"
+fi
+
+if [ ! -f "$SRC_SCRIPT" ]; then
+    echo "Error: Source script '$SRC_SCRIPT' not found in current directory."
+    exit 1
+fi
+
+if [ "$PROXMOX_MODE" -eq 1 ]; then
+    cp "$SRC_SCRIPT" "$SCRIPT_PATH"
     chmod +x "$SCRIPT_PATH"
 else
-    sudo cp tailserve "$SCRIPT_PATH"
+    sudo cp "$SRC_SCRIPT" "$SCRIPT_PATH"
     sudo chmod +x "$SCRIPT_PATH"
 fi
 
@@ -71,8 +83,6 @@ echo "===> Checking shell environments..."
 CURRENT_SHELL="$(basename "$SHELL")"
 if [ "$CURRENT_SHELL" = "fish" ]; then
     echo "Detected fish shell. Setting up global executable path lookup..."
-    # Fish doesn't strictly require separate hashing tables for bin paths if located in /usr/local/bin, 
-    # but we can make sure it's accessible or prompt status.
     fish -c "set -l" >/dev/null 2>&1 || true
 fi
 
